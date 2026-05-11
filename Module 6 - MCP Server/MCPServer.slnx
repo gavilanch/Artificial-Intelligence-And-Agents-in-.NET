@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="MCPServer/MCPServer.csproj" />
+  <Project Path="VisualizePeopleMCP/VisualizePeopleMCP.csproj" Id="0c89c982-c2ec-481e-8da3-128d7b4f1579" />
+</Solution>

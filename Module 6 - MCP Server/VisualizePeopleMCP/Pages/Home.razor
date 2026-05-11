@@ -1,0 +1,68 @@
+﻿@page "/"
+@using VisualizePeopleMCP.Entities
+@using VisualizePeopleMCP.Services
+
+@inject IPeopleService personService
+@implements IDisposable
+
+<PageTitle>Home</PageTitle>
+
+<h1>People List</h1>
+
+@if (People is not null)
+{
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Salary</th>
+                <th>Active</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var person in People)
+            {
+                <tr @key="person.Id">
+                    <td>@person.Name</td>
+                    <td>@person.Salary.ToString("#,#")</td>
+                    <td>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" value="" id="flexCheckCheckedDisabled" @bind="person.Active" disabled>
+                        </div>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+else
+{
+    <p>loading...</p>
+}
+
+@code {
+    Timer timer = null!;
+    private IEnumerable<Person> People = null!;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadPeople();
+        timer = new Timer(new TimerCallback(Elapsed), null, 0, 1000);
+    }
+
+    async Task LoadPeople()
+    {
+        People = await personService.GetAll();
+    }
+
+    private void Elapsed(object? state)
+    {
+        LoadPeople();
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        timer?.Dispose();
+    }
+}

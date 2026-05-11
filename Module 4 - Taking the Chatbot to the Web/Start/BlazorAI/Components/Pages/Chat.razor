@@ -1,0 +1,117 @@
+﻿@page "/"
+@implements IDisposable
+@inject IChatbot chatbot
+@inject IJSRuntime JS
+
+<div class="chat-wrapper">
+    <h3 class="chat-title">AI Chat</h3>
+
+    <div class="chat-messages" @ref="messageContainer">
+        @foreach (var message in chatbot.Conversation)
+        {
+            <div class="message @GetCssClass(message.Role)">
+                <div class="message-header">@GetLabel(message.Role)</div>
+                <div class="message-body">@message.Text</div>
+            </div>
+        }
+    </div>
+
+    <EditForm Model="inputModel" OnValidSubmit="Send">
+        <div class="chat-input">
+            <input class="form-control"
+                   @bind="inputModel.Text"
+                   @bind:event="oninput"
+                   placeholder="Write your message..." />
+
+            <button type="submit"
+                    class="btn btn-primary"
+                    disabled="@DisableSend">
+                Send
+            </button>
+
+            <button type="button"
+                    class="btn btn-outline-secondary"
+                    @onclick="Cancel"
+                    disabled="@(!chatbot.IsProcessing)">
+                Cancel
+            </button>
+        </div>
+    </EditForm>
+</div>
+
+@code {
+    private readonly ChatInputModel inputModel = new();
+    private ElementReference messageContainer;
+    private bool needsScroll;
+
+    private bool DisableSend =>
+        chatbot.IsProcessing ||
+        string.IsNullOrWhiteSpace(inputModel.Text);
+
+    protected override void OnInitialized()
+    {
+        chatbot.OnChange += HandleChatChanged;
+    }
+
+    private async Task Send()
+    {
+        var text = inputModel.Text?.Trim();
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        inputModel.Text = string.Empty;
+        needsScroll = true;
+
+        await chatbot.SendMessageAsync(text);
+    }
+   
+    private Task Cancel()
+    {
+        chatbot.CancelCurrentResponse();
+        return Task.CompletedTask;
+    }
+
+    private void HandleChatChanged()
+    {
+        needsScroll = true;
+        InvokeAsync(StateHasChanged);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (needsScroll)
+        {
+            needsScroll = false;
+            await JS.InvokeVoidAsync("chatScroll.scrollToBottom", messageContainer);
+        }
+    }
+
+    private static string GetLabel(MessageRole role) => role switch
+    {
+        MessageRole.User => "You",
+        MessageRole.AI => "AI",
+        MessageRole.System => "System",
+        _ => role.ToString()
+    };
+
+    private static string GetCssClass(MessageRole role) => role switch
+    {
+        MessageRole.User => "user",
+        MessageRole.AI => "assistant",
+        MessageRole.System => "system",
+        _ => role.ToString()
+    };
+
+    public void Dispose()
+    {
+        chatbot.OnChange -= HandleChatChanged;
+    }
+
+    private class ChatInputModel
+    {
+        public string Text { get; set; } = string.Empty;
+    }
+}
