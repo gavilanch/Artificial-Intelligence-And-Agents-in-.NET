@@ -1,0 +1,197 @@
+﻿@page "/upload-files"
+@using BlazorAI.Services.RAG
+@implements IDisposable
+@inject IVectorStore VectorStoreClient
+
+<h3>Upload markdown files</h3>
+
+<div class="mb-3">
+    <InputFile OnChange="SelectFiles"
+               multiple
+               accept=".md,text/markdown" />
+</div>
+
+<p class="text-muted">
+    Only .md files are allowed.
+    Maximum file size: @FormatBytes(MaxFileSizeBytes).
+</p>
+
+@if (pendingFiles.Count > 0)
+{
+    <div class="mb-3">
+        <button class="btn btn-primary"
+                @onclick="OnUploadFile"
+                disabled="@isUploading">
+            @(isUploading ? "Uploading..." : "Upload files")
+        </button>
+
+        <button class="btn btn-secondary ms-2"
+                @onclick="CancelUpload"
+                disabled="@(!isUploading)">
+            Cancel
+        </button>
+
+        <button class="btn btn-outline-danger ms-2"
+                @onclick="ClearList"
+                disabled="@isUploading">
+            Clear list
+        </button>
+    </div>
+}
+
+@if (!string.IsNullOrWhiteSpace(successMessage))
+{
+    <div class="alert alert-success">
+        @successMessage
+    </div>
+}
+
+@if (!string.IsNullOrWhiteSpace(errorMessage))
+{
+    <div class="alert alert-danger">
+        @errorMessage
+    </div>
+}
+
+@if (pendingFiles.Count > 0)
+{
+    <div class="card">
+        <div class="card-body">
+            <h5 class="card-title">Files ready to upload</h5>
+
+            <ul class="list-group">
+                @foreach (var file in pendingFiles)
+                {
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <div>
+                            <strong>@file.Name</strong>
+                            <div class="text-muted small">
+                                @FormatBytes(file.Size)
+                            </div>
+                        </div>
+
+                        <button class="btn btn-sm btn-outline-danger"
+                                @onclick="() => RemoveFile(file)"
+                                disabled="@isUploading">
+                            Remove
+                        </button>
+                    </li>
+                }
+            </ul>
+        </div>
+    </div>
+}
+
+@code {
+    private const long MaxFileSizeBytes = 10 * 1024 * 1024;
+
+    private readonly List<IBrowserFile> pendingFiles = [];
+    private bool isUploading;
+    private string? successMessage;
+    private string? errorMessage;
+    private CancellationTokenSource? cancellationTokenSource;
+
+    private void SelectFiles(InputFileChangeEventArgs e)
+    {
+        successMessage = null;
+        errorMessage = null;
+
+        pendingFiles.Clear();
+
+        var files = e.GetMultipleFiles();
+
+        foreach (var file in files)
+        {
+            if (!IsValidMarkdown(file))
+            {
+                continue;
+            }
+
+            if (file.Size > MaxFileSizeBytes)
+            {
+                continue;
+            }
+
+            pendingFiles.Add(file);
+        }
+
+        if (files.Count != pendingFiles.Count)
+        {
+            errorMessage = "Some files were ignored because they were not .md files or exceeded the allowed size.";
+        }
+    }
+
+    private async Task OnUploadFile()
+    {
+        if (isUploading || pendingFiles.Count == 0)
+        {
+            return;
+        }
+
+        isUploading = true;
+        successMessage = null;
+        errorMessage = null;
+
+        cancellationTokenSource?.Dispose();
+        cancellationTokenSource = new CancellationTokenSource();
+
+        try
+        {
+            await VectorStoreClient.UploadFiles(pendingFiles.ToList(), cancellationTokenSource.Token);
+
+            successMessage = $"{pendingFiles.Count} file(s) uploaded successfully.";
+            pendingFiles.Clear();
+        }
+        catch (OperationCanceledException)
+        {
+            errorMessage = "The operation was canceled.";
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"An error occurred while uploading the files: {ex.Message}";
+        }
+        finally
+        {
+            isUploading = false;
+        }
+    }
+
+    private void CancelUpload()
+    {
+        cancellationTokenSource?.Cancel();
+    }
+
+    private void RemoveFile(IBrowserFile file)
+    {
+        pendingFiles.Remove(file);
+    }
+
+    private void ClearList()
+    {
+        pendingFiles.Clear();
+        successMessage = null;
+        errorMessage = null;
+    }
+
+    private static bool IsValidMarkdown(IBrowserFile file)
+    {
+        return file.Name.EndsWith(".md", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes < 1024)
+            return $"{bytes} B";
+
+        if (bytes < 1024 * 1024)
+            return $"{bytes / 1024.0:F2} KB";
+
+        return $"{bytes / 1024.0 / 1024.0:F2} MB";
+    }
+
+    public void Dispose()
+    {
+        cancellationTokenSource?.Cancel();
+        cancellationTokenSource?.Dispose();
+    }
+}

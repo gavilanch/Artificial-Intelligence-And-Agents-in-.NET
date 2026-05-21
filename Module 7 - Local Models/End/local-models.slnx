@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="BlazorAI/BlazorAI.csproj" />
+  <Project Path="FirstChatbot/FirstChatbot.csproj" />
+</Solution>

@@ -1,0 +1,70 @@
+﻿@page "/documents/{FileName}"
+@using Markdig
+@inject IMarkdownRepository MarkdownRepository
+
+<PageTitle>@PageTitleText</PageTitle>
+
+@if (loading)
+{
+    <p>Loading document...</p>
+}
+else if (!string.IsNullOrWhiteSpace(error))
+{
+    <div class="alert alert-danger" role="alert">
+        @error
+    </div>
+}
+else
+{
+    <div class="markdown-container">
+        @((MarkupString)renderedHtml)
+    </div>
+}
+
+@code {
+    [Parameter]
+    public string FileName { get; set; } = default!;
+
+    private bool loading = true;
+    private string? error;
+    private string renderedHtml = string.Empty;
+
+    private string PageTitleText => string.IsNullOrWhiteSpace(FileName)
+        ? "Document"
+        : FileName;
+
+    private static readonly MarkdownPipeline pipeline = new MarkdownPipelineBuilder()
+        .UseAdvancedExtensions()
+        .Build();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loading = true;
+        error = null;
+        renderedHtml = string.Empty;
+
+        try
+        {
+            var decodedFileName = Uri.UnescapeDataString(FileName);
+
+            var markdown = await MarkdownRepository
+                .GetContentByFilename(decodedFileName);
+
+            if (string.IsNullOrWhiteSpace(markdown))
+            {
+                error = $"The file '{decodedFileName}' was not found.";
+                return;
+            }
+
+            renderedHtml = Markdown.ToHtml(markdown, pipeline);
+        }
+        catch (Exception ex)
+        {
+            error = $"An error occurred while loading the document: {ex.Message}";
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+}

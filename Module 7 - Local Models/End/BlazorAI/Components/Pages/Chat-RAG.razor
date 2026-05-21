@@ -1,0 +1,225 @@
+﻿@page "/chat-rag"
+@using BlazorAI.Services.Chatbots
+@using BlazorAI.Utilities
+@implements IDisposable
+@inject IJSRuntime JS
+
+<div class="chat-wrapper">
+    <h3 class="chat-title">Ask anything about our documentation!</h3>
+
+    <div class="chat-messages" @ref="messageContainer">
+        @foreach (var message in chatbot.Conversation)
+        {
+            <div class="message @GetCssClass(message.Role)">
+                <div class="message-header">@GetLabel(message.Role)</div>
+                <div class="message-body">
+                    @if (string.IsNullOrEmpty(message.Text))
+                    {
+                        <div class="typing-indicator">
+                            <div class="typing-dots" aria-label="The assistant is writing" role="status">
+                                <span></span>
+                                <span></span>
+                                <span></span>
+                            </div>
+                        </div>
+
+                    }
+                    else
+                    {
+                        @message.Text
+                    }
+
+                </div>
+
+                @if (message.CitedFiles.Any())
+                {
+                    <div class="message-citations">
+                        <div class="citations-title">Sources</div>
+
+                        <div class="citations-list">
+                            @foreach (var file in message.CitedFiles.DistinctBy(x => x.FileName))
+                            {
+                                <a class="citation-card"
+                                       href="@($"/documents/{Uri.EscapeDataString(file.FileName)}")">
+                                    <div class="citation-card-title">@file.FileName</div>
+                                    <div class="citation-card-subtitle">View document</div>
+                                </a>
+                            }
+                        </div>
+                    </div>
+                }
+
+            </div>
+        }
+
+        @if (chatbot.PendingApproval is not null)
+        {
+            <div class="approval-tool">
+                <h4>The AI wants to execute a sensitive action</h4>
+                <p><strong>Tool:</strong> @chatbot.PendingApproval.ToolName</p>
+
+                @if (chatbot.PendingApproval.Arguments.Count > 0)
+                {
+                    <ul>
+                        @foreach (var argument in chatbot.PendingApproval.Arguments)
+                        {
+                            <li><strong>@argument.Key:</strong> @argument.Value</li>
+                        }
+                    </ul>
+                }
+
+                <div class="approval-actions">
+                    <button class="btn btn-success"
+                            @onclick="Approve"
+                            disabled="@chatbot.IsProcessing">
+                        Approve
+                    </button>
+
+                    <button class="btn btn-danger"
+                            @onclick="Reject"
+                            disabled="@chatbot.IsProcessing">
+                        Reject
+                    </button>
+                </div>
+            </div>
+        }
+
+    </div>
+
+    <EditForm Model="inputModel" OnValidSubmit="Send">
+        <div class="chat-input">
+
+            <select class="form-select model-selector"
+                    @bind="selectedModel"
+                    @bind:after="onModelChange"
+                    disabled="@(chatbot.IsProcessing || chatbot.PendingApproval is not null)">
+                @foreach (var item in availableModels)
+                {
+                    <option value="@item">@item</option>
+                }
+            </select>
+
+
+            <input class="form-control"
+                   @bind="inputModel.Text"
+                   @bind:event="oninput"
+                   placeholder="Write your message..." />
+
+            <button type="submit"
+                    class="btn btn-primary"
+                    disabled="@DisableSend">
+                Send
+            </button>
+
+            <button type="button"
+                    class="btn btn-outline-secondary"
+                    @onclick="Cancel"
+                    disabled="@(!chatbot.IsProcessing)">
+                Cancel
+            </button>
+        </div>
+    </EditForm>
+</div>
+
+@code {
+
+    [Inject(Key = "chat-rag")]
+    public IChatbot chatbot { get; set; } = null!;
+
+    private readonly List<string> availableModels = AIModels.GetAvailableModels().ToList();
+    private string selectedModel = AIModels.GetDefaultModel;
+
+    private void onModelChange()
+    {
+        chatbot.SetModel(selectedModel);
+    }
+
+
+    private readonly ChatInputModel inputModel = new();
+    private ElementReference messageContainer;
+    private bool needsScroll;
+
+    private bool DisableSend =>
+        chatbot.IsProcessing ||
+        chatbot.PendingApproval is not null ||
+        string.IsNullOrWhiteSpace(inputModel.Text);
+
+    protected override void OnInitialized()
+    {
+        chatbot.OnChange += HandleChatChanged;
+    }
+
+    private async Task Send()
+    {
+        var text = inputModel.Text?.Trim();
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        inputModel.Text = string.Empty;
+        needsScroll = true;
+
+        await chatbot.SendMessageAsync(text);
+    }
+
+    private async Task Approve()
+    {
+        needsScroll = true;
+        await chatbot.ResolveApprovalAsync(true);
+    }
+
+    private async Task Reject()
+    {
+        needsScroll = true;
+        await chatbot.ResolveApprovalAsync(false);
+    }
+   
+    private Task Cancel()
+    {
+        chatbot.CancelCurrentResponse();
+        return Task.CompletedTask;
+    }
+
+    private void HandleChatChanged()
+    {
+        needsScroll = true;
+        InvokeAsync(StateHasChanged);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (needsScroll)
+        {
+            needsScroll = false;
+            await JS.InvokeVoidAsync("chatScroll.scrollToBottom", messageContainer);
+        }
+    }
+
+    private static string GetLabel(MessageRole role) => role switch
+    {
+        MessageRole.User => "You",
+        MessageRole.AI => "AI",
+        MessageRole.System => "System",
+        _ => role.ToString()
+    };
+
+    private static string GetCssClass(MessageRole role) => role switch
+    {
+        MessageRole.User => "user",
+        MessageRole.AI => "assistant",
+        MessageRole.System => "system",
+        _ => role.ToString()
+    };
+
+    public void Dispose()
+    {
+        chatbot.OnChange -= HandleChatChanged;
+    }
+
+    private class ChatInputModel
+    {
+        public string Text { get; set; } = string.Empty;
+    }
+}
