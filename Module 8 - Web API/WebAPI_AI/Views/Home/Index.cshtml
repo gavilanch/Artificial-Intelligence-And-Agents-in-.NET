@@ -1,0 +1,448 @@
+﻿@{
+    ViewData["Title"] = "AI Chat";
+    ViewData["BodyClass"] = "chat-page";
+}
+
+<div class="chat-layout">
+    <aside class="chat-sidebar">
+        <button id="btnNewChat" class="btn btn-primary w-100 mb-3">
+            New Chat
+        </button>
+
+        <div id="conversationList" class="conversations"></div>
+    </aside>
+
+    <main class="chat-wrapper">
+        <h3 class="chat-title">AI Chat</h3>
+
+        <div id="chatMessages" class="chat-messages"></div>
+
+        <form id="chatForm">
+            <input type="hidden" id="currentConversationId" />
+            <div class="chat-input">
+                <input id="messageText"
+                       class="form-control"
+                       placeholder="Type your message..."
+                       autocomplete="off" />
+
+                <button id="btnSend" type="submit" class="btn btn-primary">
+                    Send
+                </button>
+
+                <button id="btnCancel"
+                        type="button"
+                        class="btn btn-outline-secondary"
+                        disabled>
+                    Cancel
+                </button>
+            </div>
+        </form>
+    </main>
+</div>
+
+@section Scripts {
+    <script>
+        const chatForm = document.getElementById("chatForm");
+        const messageText = document.getElementById("messageText");
+        const chatMessages = document.getElementById("chatMessages");
+        const currentConversationId = document.getElementById("currentConversationId");
+        const conversationList = document.getElementById("conversationList");
+        let currentAbortController = null;
+        let hasPendingApproval = false;
+
+        document.addEventListener("DOMContentLoaded", async () => {
+
+            await loadConversations();
+
+             const firstConversation = document.querySelector("[data-conversation-id]");
+
+              if (firstConversation) {
+                 const id = firstConversation.dataset.conversationId;
+                 currentConversationId.value = id;
+                 loadConversation(id);
+                 markConversationAsActive(id);
+              } else {
+                  await createNewChat();
+              }
+        });
+
+        async function loadConversations() {
+            const response = await fetch("/api/Chat/GetConversations");
+            const conversations = await response.json();
+        
+            conversationList.innerHTML = "";
+
+            for (const conversation of conversations) {
+            
+                  const row = document.createElement("div");
+                  row.className = "conversation-row";
+
+                   const button = document.createElement("button");
+                    button.className = "conversation-item";
+                    button.dataset.conversationId = conversation.id;
+                    button.textContent = conversation.title;
+
+                    if (conversation.id === currentConversationId.value) {
+                        button.classList.add("active");
+                    }
+
+                    const deleteButton = document.createElement("button");
+                    deleteButton.type = "button";
+                    deleteButton.className = "conversation-delete";
+                    deleteButton.dataset.deleteConversationId = conversation.id;
+                    deleteButton.textContent = "×";
+
+                    row.appendChild(button);
+                    row.appendChild(deleteButton);
+                    conversationList.appendChild(row);
+            }
+
+            return conversations;
+        }
+
+          async function createNewChat() {
+            const response = await fetch("/api/Chat/NewChat", {
+                method: "POST"
+            });
+
+            if (!response.ok) {
+                console.error("Unable to create a new chat.");
+                return;
+            }
+
+            const data = await response.json();
+            currentConversationId.value = data.id;
+            await loadConversations();
+            await loadConversation(data.id);
+            markConversationAsActive(data.id);
+        }
+
+        chatForm.addEventListener("submit", async e => {
+        
+            e.preventDefault();
+
+            const text = messageText.value.trim();
+            
+            if (!text) {
+                return;
+            }
+
+            messageText.value = "";
+
+            addMessage("User", text);
+            const assistantMessage = addMessage("AI", "");
+            const assistantMessageBody = assistantMessage.querySelector(".message-body");
+
+            setProcessingControls(true);
+
+            const abortController = new AbortController();
+            currentAbortController = abortController;
+
+            try {
+                const response = await fetch("/api/Chat/Send", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        conversationId: currentConversationId.value,
+                        text
+                    }),
+                    signal: abortController.signal
+                 });
+
+                 if (!response.ok || !response.body) {
+                    assistantMessageBody.textContent = "Unable to get a response from the AI.";
+                    return;
+                 }
+
+                await readStreamResponse(response, text => {
+                    assistantMessageBody.textContent += text;
+                    scrollToBottom();
+                });
+
+                 await loadConversations();
+                 markConversationAsActive(currentConversationId.value);
+
+            }
+            catch(error){
+                 if (error.name === "AbortError") {
+                    markResponseAsCancelled(assistantMessageBody);
+                    return;
+                }
+
+                throw error;
+            }
+            finally {
+                setProcessingControls(false);
+            }
+
+        });
+
+        function addApprovalRequest(approval) {
+             hasPendingApproval = true;
+
+             const div = document.createElement("div");
+             div.className = "tool-approval";
+
+             const argumentsList = Object.entries(approval.arguments ?? {})
+                            .map(([key, value]) => `<li><strong>${key}:</strong> ${value}</li>`)
+                            .join("");
+
+                 div.innerHTML = `
+            <h4>The AI wants to perform a sensitive action</h4>
+            <p><strong>Tool:</strong> ${approval.toolName}</p>
+
+            ${argumentsList ? `<ul>${argumentsList}</ul>` : ""}
+
+            <div class="approval-actions">
+                <button class="btn btn-success" data-approved="true">
+                    Approve
+                </button>
+
+                <button class="btn btn-danger" data-approved="false">
+                    Reject
+                </button>
+            </div>
+        `;
+
+         div.querySelectorAll("[data-approved]").forEach(button => {
+            button.addEventListener("click", async () => {
+                await resolveApproval(button.dataset.approved === "true");
+            });
+        });
+
+         chatMessages.appendChild(div);
+         setProcessingControls(false);
+         scrollToBottom();
+        }
+
+        async function resolveApproval(approved) {
+        
+              await fetch("/api/Chat/ResolveApproval", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json"
+                        },
+                        body: JSON.stringify({
+                            conversationId: currentConversationId.value,
+                            approved
+                        })
+                    });
+
+            await loadConversation(currentConversationId.value);
+        
+        }
+
+        btnCancel.addEventListener("click", () => {
+            currentAbortController?.abort();
+        });
+
+        function markResponseAsCancelled(aiMessageBody) {
+            const currentText = aiMessageBody.textContent.trim();
+
+             aiMessageBody.textContent = currentText
+                                        ? `${currentText} [cancelled]`
+                                        : "[Response cancelled]";
+
+            scrollToBottom();
+        }
+
+        async function deleteConversation(id) {
+            
+            if (!confirm("Are you sure you want to delete this conversation?")) {
+                return;
+            }
+
+            const response = await fetch("/api/Chat/DeleteConversation", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify(id)
+            });
+
+            if (!response.ok) {
+              console.error("Unable to delete the conversation.");
+              return;
+            }
+
+            const conversations = await loadConversations();
+
+            const wasActiveConversation = id === currentConversationId.value;
+
+            if (!wasActiveConversation) {
+                markConversationAsActive(currentConversationId.value);
+                return;
+            }
+
+            if (conversations.length > 0) {
+                const firstConversation = conversations[0];
+                currentConversationId.value = firstConversation.id;
+                await loadConversation(firstConversation.id);
+                markConversationAsActive(firstConversation.id);
+                return;
+            }
+
+            chatMessages.innerHTML = "";
+            currentConversationId.value = "";
+            await createNewChat();
+        }
+
+         function markConversationAsActive(id) {
+            document.querySelectorAll(".conversation-item").forEach(item => {
+                item.classList.toggle("active", item.dataset.conversationId === id);
+            });
+        }
+
+
+        async function loadConversation(id) {
+        
+            const response = await fetch(`/api/Chat/GetConversation?id=${id}`);
+            const data = await response.json();
+            chatMessages.innerHTML = "";
+            hasPendingApproval = false;
+
+            for (const message of data.messages) {
+                addMessage(message.role, message.text);
+            }
+
+            if (data.pendingApproval){
+                addApprovalRequest(data.pendingApproval);
+            }
+        
+            scrollToBottom();
+        }
+
+        function addMessage(role, text) {
+        
+            const div = document.createElement("div");
+            div.className = `message ${getCssClass(role)}`;
+
+            div.innerHTML = `
+                <div class="message-header">${getLabel(role)}</div>
+                <div class="message-body"></div>
+            `;
+
+            div.querySelector(".message-body").textContent = text;
+            chatMessages.appendChild(div);
+            scrollToBottom();
+
+            return div;
+        }
+
+        conversationList.addEventListener("click", async e => {
+            const deleteButton = e.target.closest("[data-delete-conversation-id]");
+
+            if (deleteButton) {
+                await deleteConversation(deleteButton.dataset.deleteConversationId);
+                return;
+            }
+
+            const button = e.target.closest("[data-conversation-id]");
+
+            if (!button) {
+               return;
+            }
+
+            const id = button.dataset.conversationId;
+            currentConversationId.value = id;
+
+            await loadConversation(id);
+            markConversationAsActive(id);
+        });
+
+        async function readStreamResponse(response, onDelta) {
+        
+             const reader = response.body.getReader();
+             const decoder = new TextDecoder();
+             let buffer = "";
+
+             while (true) {
+             
+                 const { value, done } = await reader.read();
+
+                 if (done){
+                     break;
+                 }
+
+                  buffer += decoder.decode(value, { stream: true });
+                  const lines = buffer.split("\n");
+                  buffer = lines.pop() ?? "";
+
+                  for (const line of lines) {
+                      processStreamEvent(line, onDelta);
+                  }
+             }
+
+             buffer += decoder.decode();
+
+             if (buffer.trim()) {
+                processStreamEvent(buffer, onDelta);
+             }
+        
+        }
+
+        function processStreamEvent(line, onDelta) {
+           if (!line.trim()) {
+              return;
+           }
+
+            const event = JSON.parse(line);
+
+            if (event.type === "StartConversation") {
+               currentConversationId.value = event.data.id;
+               return;
+            }
+
+            if (event.type === "Delta") {
+               onDelta(event.data.text ?? "");
+               return;
+            }
+
+            if (event.type === "ApprovalRequired") {
+                addApprovalRequest({
+                    toolName: event.data.toolName,
+                    arguments: event.data.arguments
+                });
+                return;
+            }
+
+            if (event.type === "Error") {
+               addMessage("System", event.data.message ?? "An error occurred while processing the response.");
+            }
+
+        }
+
+        function getCssClass(role) {
+            if (role === "User") return "user";
+            if (role === "AI") return "assistant";
+            if (role === "System") return "system";
+
+            return "system";
+        }
+
+        function getLabel(role) {
+            if (role === "User") return "You";
+            if (role === "AI") return "AI";
+            if (role === "System") return "System";
+
+            return role;
+        }
+
+         function scrollToBottom() {
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        btnNewChat.addEventListener("click", async () => {
+            await createNewChat();
+        });
+
+         function setProcessingControls(isProcessing) {
+            btnCancel.disabled = !isProcessing;
+            btnSend.disabled = isProcessing || hasPendingApproval;
+            messageText.disabled = isProcessing || hasPendingApproval;
+        }
+
+    </script>
+}
