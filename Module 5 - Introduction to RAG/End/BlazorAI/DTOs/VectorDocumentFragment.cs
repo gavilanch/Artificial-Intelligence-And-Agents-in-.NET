@@ -14,7 +14,7 @@ namespace BlazorAI.DTOs
         public string Text { get; set; } = string.Empty;
 
         [VectorStoreVector(
-                Dimensions: 1536,
+                dimensions: 1536,
                 DistanceFunction = DistanceFunction.CosineSimilarity)]
         public ReadOnlyMemory<float> Embedding { get; set; }
     }

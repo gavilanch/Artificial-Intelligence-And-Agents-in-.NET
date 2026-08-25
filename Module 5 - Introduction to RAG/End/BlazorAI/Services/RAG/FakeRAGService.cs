@@ -1,6 +1,6 @@
 ﻿using BlazorAI.DTOs;
+using CommunityToolkit.VectorData.InMemory;
 using Microsoft.Extensions.AI;
-using Microsoft.SemanticKernel.Connectors.InMemory;
 
 namespace BlazorAI.Services.RAG
 {

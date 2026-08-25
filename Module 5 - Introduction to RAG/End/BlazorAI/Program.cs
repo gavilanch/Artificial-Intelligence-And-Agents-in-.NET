@@ -8,7 +8,7 @@ using BlazorAI.Services.RAG;
 using ChatbotSimple.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
-using Microsoft.SemanticKernel.Connectors.InMemory;
+using CommunityToolkit.VectorData.InMemory;
 using OpenAI.Embeddings;
 
 var builder = WebApplication.CreateBuilder(args);
